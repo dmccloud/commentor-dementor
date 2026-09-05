@@ -4,6 +4,11 @@ All notable changes to the "commentor-dementor" extension will be documented in 
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.1.3] - 2026-09-05
+
+- Make multi-line comment folding wait for Cursor and VS Code to resolve folding ranges.
+- Collapse qualifying multi-line comments even when their total text is shorter than the single-line preview length.
+
 ## [0.1.2] - 2026-09-05
 
 - Replace the Marketplace icon with a friendlier design.
