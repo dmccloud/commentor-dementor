@@ -2,7 +2,8 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from "vscode";
 
-const DEFAULT_PREVIEW_LENGTH = 20;
+const DEFAULT_PREVIEW_LENGTH = 80;
+const DEFAULT_CONSECUTIVE_LINE_COMMENT_THRESHOLD = 5;
 const BLOCK_COMMENT_LANGUAGE_IDS = [
   "c",
   "cpp",
@@ -174,6 +175,75 @@ function findBlockComments(document: vscode.TextDocument): BlockComment[] {
   return comments;
 }
 
+function findConsecutiveLineCommentGroups(
+  document: vscode.TextDocument,
+  minimumLines: number,
+): BlockComment[] {
+  const blockCommentLines = new Set<number>();
+  for (const comment of findBlockComments(document)) {
+    for (let line = comment.start.line; line <= comment.end.line; line++) {
+      blockCommentLines.add(line);
+    }
+  }
+
+  const groups: BlockComment[] = [];
+  let start: vscode.Position | undefined;
+  let end: vscode.Position | undefined;
+  let lineCount = 0;
+  const finishGroup = (): void => {
+    if (!start || !end || lineCount < minimumLines) {
+      start = undefined;
+      end = undefined;
+      lineCount = 0;
+      return;
+    }
+    groups.push({
+      start,
+      end,
+      text: document.getText(new vscode.Range(start, end)),
+    });
+    start = undefined;
+    end = undefined;
+    lineCount = 0;
+  };
+
+  for (let lineNumber = 0; lineNumber < document.lineCount; lineNumber++) {
+    const line = document.lineAt(lineNumber).text;
+    const comment = blockCommentLines.has(lineNumber)
+      ? undefined
+      : findComment(line, document.languageId);
+    const isStandaloneComment =
+      comment !== undefined &&
+      line.slice(0, comment.startCharacter).trim().length === 0;
+
+    if (!comment || !isStandaloneComment) {
+      finishGroup();
+      continue;
+    }
+
+    if (!start) {
+      start = new vscode.Position(lineNumber, comment.startCharacter);
+    }
+    end = new vscode.Position(lineNumber, comment.endCharacter);
+    lineCount++;
+  }
+  finishGroup();
+
+  return groups;
+}
+
+function findFoldableCommentGroups(
+  document: vscode.TextDocument,
+  minimumConsecutiveLines: number,
+): BlockComment[] {
+  return [
+    ...findBlockComments(document).filter(
+      (comment) => comment.start.line < comment.end.line,
+    ),
+    ...findConsecutiveLineCommentGroups(document, minimumConsecutiveLines),
+  ];
+}
+
 function foldedCommentOptions(
   editor: vscode.TextEditor,
   previewLength: number,
@@ -290,9 +360,12 @@ function foldedCommentHover(
 
 function blockCommentHoverOptions(
   editor: vscode.TextEditor,
+  minimumConsecutiveLines: number,
 ): vscode.DecorationOptions[] {
-  return findBlockComments(editor.document)
-    .filter((comment) => comment.start.line < comment.end.line)
+  return findFoldableCommentGroups(
+    editor.document,
+    minimumConsecutiveLines,
+  )
     .map((comment) => {
       const hoverMessage = new vscode.MarkdownString("**Full comment**\n\n");
       hoverMessage.appendCodeblock(comment.text, editor.document.languageId);
@@ -305,10 +378,12 @@ function blockCommentHoverOptions(
     });
 }
 
-function selectedBlockCommentStartLines(editor: vscode.TextEditor): number[] {
+function selectedBlockCommentStartLines(
+  editor: vscode.TextEditor,
+  minimumConsecutiveLines: number,
+): number[] {
   const startLines = new Set(
-    findBlockComments(editor.document)
-      .filter((comment) => comment.start.line < comment.end.line)
+    findFoldableCommentGroups(editor.document, minimumConsecutiveLines)
       .map((comment) => comment.start.line),
   );
   return editor.selections
@@ -319,8 +394,9 @@ function selectedBlockCommentStartLines(editor: vscode.TextEditor): number[] {
 function blockCommentStartLinesToFold(
   editor: vscode.TextEditor,
   previewLength: number,
+  minimumConsecutiveLines: number,
 ): number[] {
-  return findBlockComments(editor.document)
+  return findFoldableCommentGroups(editor.document, minimumConsecutiveLines)
     .filter(
       (comment) =>
         comment.start.line < comment.end.line &&
@@ -360,13 +436,19 @@ export function activate(context: vscode.ExtensionContext): void {
     const previewLength = vscode.workspace
       .getConfiguration("commentorDementor")
       .get<number>("previewLength", DEFAULT_PREVIEW_LENGTH);
+    const minimumConsecutiveLines = vscode.workspace
+      .getConfiguration("commentorDementor")
+      .get<number>(
+        "consecutiveLineCommentThreshold",
+        DEFAULT_CONSECUTIVE_LINE_COMMENT_THRESHOLD,
+      );
     editor.setDecorations(
       foldedCommentDecoration,
       foldedCommentOptions(editor, previewLength),
     );
     editor.setDecorations(
       blockCommentHoverDecoration,
-      blockCommentHoverOptions(editor),
+      blockCommentHoverOptions(editor, minimumConsecutiveLines),
     );
   };
   const updateActiveEditor = (): void =>
@@ -378,7 +460,17 @@ export function activate(context: vscode.ExtensionContext): void {
     const previewLength = vscode.workspace
       .getConfiguration("commentorDementor")
       .get<number>("previewLength", DEFAULT_PREVIEW_LENGTH);
-    const selectionLines = blockCommentStartLinesToFold(editor, previewLength);
+    const minimumConsecutiveLines = vscode.workspace
+      .getConfiguration("commentorDementor")
+      .get<number>(
+        "consecutiveLineCommentThreshold",
+        DEFAULT_CONSECUTIVE_LINE_COMMENT_THRESHOLD,
+      );
+    const selectionLines = blockCommentStartLinesToFold(
+      editor,
+      previewLength,
+      minimumConsecutiveLines,
+    );
     if (selectionLines.length > 0) {
       void vscode.commands.executeCommand("editor.fold", {
         direction: "down",
@@ -397,11 +489,16 @@ export function activate(context: vscode.ExtensionContext): void {
     foldedCommentDecoration,
     blockCommentHoverDecoration,
     vscode.languages.registerFoldingRangeProvider(
-      BLOCK_COMMENT_LANGUAGE_IDS.map((language) => ({ language })),
+      COMMENT_LANGUAGE_IDS.map((language) => ({ language })),
       {
         provideFoldingRanges(document) {
-          return findBlockComments(document)
-            .filter((comment) => comment.start.line < comment.end.line)
+          const minimumConsecutiveLines = vscode.workspace
+            .getConfiguration("commentorDementor", document.uri)
+            .get<number>(
+              "consecutiveLineCommentThreshold",
+              DEFAULT_CONSECUTIVE_LINE_COMMENT_THRESHOLD,
+            );
+          return findFoldableCommentGroups(document, minimumConsecutiveLines)
             .map(
               (comment) =>
                 new vscode.FoldingRange(
@@ -430,7 +527,16 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.window.onDidChangeActiveTextEditor(updateAndCollapseEditor),
     vscode.window.onDidChangeTextEditorSelection((event) => {
-      const selectedBlockStarts = selectedBlockCommentStartLines(event.textEditor);
+      const minimumConsecutiveLines = vscode.workspace
+        .getConfiguration("commentorDementor")
+        .get<number>(
+          "consecutiveLineCommentThreshold",
+          DEFAULT_CONSECUTIVE_LINE_COMMENT_THRESHOLD,
+        );
+      const selectedBlockStarts = selectedBlockCommentStartLines(
+        event.textEditor,
+        minimumConsecutiveLines,
+      );
       if (selectedBlockStarts.length > 0) {
         void vscode.commands.executeCommand("editor.unfold", {
           direction: "down",

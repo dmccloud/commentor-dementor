@@ -29,9 +29,15 @@
       "properties": {
         "commentorDementor.previewLength": {
           "type": "number",
-          "default": 40,
+          "default": 80,
           "minimum": 1,
           "description": "Number of comment characters to show before folding the remainder."
+        },
+        "commentorDementor.consecutiveLineCommentThreshold": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "description": "Number of consecutive standalone single-line comments required before they collapse as one group."
         }
       }
     }
