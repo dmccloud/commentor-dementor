@@ -22,6 +22,19 @@ const BLOCK_COMMENT_LANGUAGE_IDS = [
   "typescript",
   "typescriptreact",
 ];
+const COMMENT_LANGUAGE_IDS = [
+  ...BLOCK_COMMENT_LANGUAGE_IDS,
+  "haskell",
+  "ini",
+  "lua",
+  "makefile",
+  "properties",
+  "python",
+  "ruby",
+  "shellscript",
+  "toml",
+  "yaml",
+];
 
 interface CommentMatch {
   startCharacter: number;
@@ -201,10 +214,7 @@ function foldedCommentOptions(
 
       const foldedStart = comment.startCharacter + previewLength;
       const isBeingEdited = cursorPositions.some(
-        (position) =>
-          position.line === lineNumber &&
-          position.character >= foldedStart &&
-          position.character <= comment.endCharacter,
+        (position) => position.line === lineNumber,
       );
       if (isBeingEdited) {
         continue;
@@ -227,6 +237,55 @@ function foldedCommentOptions(
     }
   }
   return decorations;
+}
+
+function foldedCommentHover(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  previewLength: number,
+): vscode.Hover | undefined {
+  const line = document.lineAt(position.line).text;
+  const comments = [
+    findComment(line, document.languageId),
+    ...findBlockComments(document)
+      .filter(
+        (comment) =>
+          comment.start.line === position.line &&
+          comment.end.line === position.line,
+      )
+      .map((comment) => ({
+        startCharacter: comment.start.character,
+        endCharacter: comment.end.character,
+      })),
+  ].filter((comment): comment is CommentMatch => comment !== undefined);
+
+  for (const comment of comments) {
+    const foldedStart = comment.startCharacter + previewLength;
+    if (
+      comment.endCharacter - comment.startCharacter <= previewLength ||
+      position.character < foldedStart - 1 ||
+      position.character > comment.endCharacter
+    ) {
+      continue;
+    }
+
+    const message = new vscode.MarkdownString("**Full comment**\n\n");
+    message.appendCodeblock(
+      line.slice(comment.startCharacter, comment.endCharacter),
+      document.languageId,
+    );
+    return new vscode.Hover(
+      message,
+      new vscode.Range(
+        position.line,
+        Math.max(comment.startCharacter, foldedStart - 1),
+        position.line,
+        comment.endCharacter,
+      ),
+    );
+  }
+
+  return undefined;
 }
 
 function blockCommentHoverOptions(
@@ -351,6 +410,17 @@ export function activate(context: vscode.ExtensionContext): void {
                   vscode.FoldingRangeKind.Comment,
                 ),
             );
+        },
+      },
+    ),
+    vscode.languages.registerHoverProvider(
+      COMMENT_LANGUAGE_IDS.map((language) => ({ language })),
+      {
+        provideHover(document, position) {
+          const previewLength = vscode.workspace
+            .getConfiguration("commentorDementor")
+            .get<number>("previewLength", DEFAULT_PREVIEW_LENGTH);
+          return foldedCommentHover(document, position, previewLength);
         },
       },
     ),
