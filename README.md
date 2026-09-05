@@ -3,6 +3,11 @@
 Commentor Dementor keeps long comments readable by displaying their first 80
 characters followed by `...`.
 
+## Install
+
+After release, search for **Commentor Dementor** in the Extensions view in VS
+Code or Cursor. The extension is published as `dmccloud.commentor-dementor`.
+
 Hover the folded portion to see the complete comment in a tooltip. Move the
 cursor into that portion to temporarily reveal the original text so it can be
 read or edited normally; moving away folds it again.
@@ -27,3 +32,7 @@ defaults to `5`.
 
 The extension recognizes `//` comments in C-style languages, plus `#`, `--`,
 and `;` in common languages that use those markers.
+
+## License
+
+[MIT](LICENSE)

@@ -9,3 +9,8 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+out/example.js
+out/example.js.map
+out/test/**
+pnpm-lock.yaml
+images/commentor-dementor-icon-friendly.png
