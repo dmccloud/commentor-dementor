@@ -1,26 +1,386 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+const DEFAULT_PREVIEW_LENGTH = 20;
+const BLOCK_COMMENT_LANGUAGE_IDS = [
+  "c",
+  "cpp",
+  "csharp",
+  "css",
+  "dart",
+  "fsharp",
+  "go",
+  "java",
+  "javascript",
+  "javascriptreact",
+  "kotlin",
+  "php",
+  "rust",
+  "sql",
+  "swift",
+  "typescript",
+  "typescriptreact",
+];
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "commentor-dementor" is now active!');
-
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('commentor-dementor.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from commentor-dementor!');
-	});
-
-	context.subscriptions.push(disposable);
+interface CommentMatch {
+  startCharacter: number;
+  endCharacter: number;
 }
 
-// This method is called when your extension is deactivated
-export function deactivate() {}
+interface BlockComment {
+  start: vscode.Position;
+  end: vscode.Position;
+  text: string;
+}
+
+/** Finds a supported single-line comment while ignoring quoted strings. */
+function findComment(
+  line: string,
+  languageId: string,
+): CommentMatch | undefined {
+  const marker = lineCommentMarker(languageId);
+  if (!marker) {
+    return undefined;
+  }
+  let quote: string | undefined;
+  let escaped = false;
+
+  for (
+    let character = 0;
+    character <= line.length - marker.length;
+    character++
+  ) {
+    const current = line[character];
+    if (quote) {
+      if (current === quote && !escaped) {
+        quote = undefined;
+      }
+      escaped = current === "\\" && !escaped;
+      if (current !== "\\") {
+        escaped = false;
+      }
+      continue;
+    }
+    if (current === '"' || current === "'" || current === "`") {
+      quote = current;
+      continue;
+    }
+    if (line.startsWith(marker, character)) {
+      return { startCharacter: character, endCharacter: line.length };
+    }
+  }
+  return undefined;
+}
+
+function lineCommentMarker(languageId: string): string | undefined {
+  if (
+    ["python", "ruby", "shellscript", "yaml", "toml", "makefile"].includes(
+      languageId,
+    )
+  ) {
+    return "#";
+  }
+  if (["sql", "lua", "haskell"].includes(languageId)) {
+    return "--";
+  }
+  if (["ini", "properties"].includes(languageId)) {
+    return ";";
+  }
+  if (
+    [
+      "c",
+      "cpp",
+      "csharp",
+      "css",
+      "dart",
+      "fsharp",
+      "go",
+      "java",
+      "javascript",
+      "javascriptreact",
+      "kotlin",
+      "php",
+      "rust",
+      "swift",
+      "typescript",
+      "typescriptreact",
+    ].includes(languageId)
+  ) {
+    return "//";
+  }
+  return undefined;
+}
+
+function supportsBlockComments(languageId: string): boolean {
+  return BLOCK_COMMENT_LANGUAGE_IDS.includes(languageId);
+}
+
+function findBlockComments(document: vscode.TextDocument): BlockComment[] {
+  if (!supportsBlockComments(document.languageId)) {
+    return [];
+  }
+
+  const comments: BlockComment[] = [];
+  let start: vscode.Position | undefined;
+
+  for (let lineNumber = 0; lineNumber < document.lineCount; lineNumber++) {
+    const line = document.lineAt(lineNumber).text;
+    let character = 0;
+
+    while (character < line.length) {
+      if (!start) {
+        const lineComment = findComment(line, document.languageId);
+        const blockStart = line.indexOf("/*", character);
+        if (
+          blockStart === -1 ||
+          (lineComment && lineComment.startCharacter < blockStart)
+        ) {
+          break;
+        }
+        start = new vscode.Position(lineNumber, blockStart);
+        character = blockStart + 2;
+      }
+
+      const blockEnd = line.indexOf("*/", character);
+      if (blockEnd === -1) {
+        break;
+      }
+
+      const end = new vscode.Position(lineNumber, blockEnd + 2);
+      comments.push({
+        start,
+        end,
+        text: document.getText(new vscode.Range(start, end)),
+      });
+      start = undefined;
+      character = blockEnd + 2;
+    }
+  }
+
+  return comments;
+}
+
+function foldedCommentOptions(
+  editor: vscode.TextEditor,
+  previewLength: number,
+): vscode.DecorationOptions[] {
+  const cursorPositions = editor.selections.map(
+    (selection) => selection.active,
+  );
+  const decorations: vscode.DecorationOptions[] = [];
+  const inlineBlockCommentsByLine = new Map<number, CommentMatch[]>();
+
+  for (const comment of findBlockComments(editor.document)) {
+    if (comment.start.line !== comment.end.line) {
+      continue;
+    }
+    const comments = inlineBlockCommentsByLine.get(comment.start.line) ?? [];
+    comments.push({
+      startCharacter: comment.start.character,
+      endCharacter: comment.end.character,
+    });
+    inlineBlockCommentsByLine.set(comment.start.line, comments);
+  }
+
+  for (
+    let lineNumber = 0;
+    lineNumber < editor.document.lineCount;
+    lineNumber++
+  ) {
+    const line = editor.document.lineAt(lineNumber).text;
+    const comments = [
+      findComment(line, editor.document.languageId),
+      ...(inlineBlockCommentsByLine.get(lineNumber) ?? []),
+    ].filter((comment): comment is CommentMatch => comment !== undefined);
+
+    for (const comment of comments) {
+      if (comment.endCharacter - comment.startCharacter <= previewLength) {
+        continue;
+      }
+
+      const foldedStart = comment.startCharacter + previewLength;
+      const isBeingEdited = cursorPositions.some(
+        (position) =>
+          position.line === lineNumber &&
+          position.character >= foldedStart &&
+          position.character <= comment.endCharacter,
+      );
+      if (isBeingEdited) {
+        continue;
+      }
+
+      const fullComment = line
+        .slice(comment.startCharacter, comment.endCharacter)
+        .replace(/`/g, "\\`");
+      decorations.push({
+        range: new vscode.Range(
+          lineNumber,
+          foldedStart,
+          lineNumber,
+          comment.endCharacter,
+        ),
+        hoverMessage: new vscode.MarkdownString(
+          `**Full comment**\n\n\`${fullComment}\``,
+        ),
+      });
+    }
+  }
+  return decorations;
+}
+
+function blockCommentHoverOptions(
+  editor: vscode.TextEditor,
+): vscode.DecorationOptions[] {
+  return findBlockComments(editor.document)
+    .filter((comment) => comment.start.line < comment.end.line)
+    .map((comment) => {
+      const hoverMessage = new vscode.MarkdownString("**Full comment**\n\n");
+      hoverMessage.appendCodeblock(comment.text, editor.document.languageId);
+      const firstLineEnd = editor.document.lineAt(comment.start.line).range.end;
+
+      return {
+        range: new vscode.Range(comment.start, firstLineEnd),
+        hoverMessage,
+      };
+    });
+}
+
+function selectedBlockCommentStartLines(editor: vscode.TextEditor): number[] {
+  const startLines = new Set(
+    findBlockComments(editor.document)
+      .filter((comment) => comment.start.line < comment.end.line)
+      .map((comment) => comment.start.line),
+  );
+  return editor.selections
+    .map((selection) => selection.active.line)
+    .filter((line) => startLines.has(line));
+}
+
+function blockCommentStartLinesToFold(
+  editor: vscode.TextEditor,
+  previewLength: number,
+): number[] {
+  return findBlockComments(editor.document)
+    .filter(
+      (comment) =>
+        comment.start.line < comment.end.line &&
+        comment.text.length > previewLength &&
+        !editor.selections.some((selection) =>
+          new vscode.Range(comment.start, comment.end).contains(
+            selection.active,
+          ),
+        ),
+    )
+    .map((comment) => comment.start.line);
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  console.log(
+    'Congratulations, your extension "commentor-dementor" is now active!',
+  );
+  const foldedCommentDecoration = vscode.window.createTextEditorDecorationType({
+    color: "rgba(0, 0, 0, 0)",
+    opacity: "0",
+    before: {
+      contentText: "...",
+      color: new vscode.ThemeColor("editorCodeLens.foreground"),
+      margin: "0",
+    },
+    rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+  });
+  const blockCommentHoverDecoration =
+    vscode.window.createTextEditorDecorationType({
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    });
+
+  const updateEditor = (editor: vscode.TextEditor | undefined): void => {
+    if (!editor) {
+      return;
+    }
+    const previewLength = vscode.workspace
+      .getConfiguration("commentorDementor")
+      .get<number>("previewLength", DEFAULT_PREVIEW_LENGTH);
+    editor.setDecorations(
+      foldedCommentDecoration,
+      foldedCommentOptions(editor, previewLength),
+    );
+    editor.setDecorations(
+      blockCommentHoverDecoration,
+      blockCommentHoverOptions(editor),
+    );
+  };
+  const updateActiveEditor = (): void =>
+    updateEditor(vscode.window.activeTextEditor);
+  const collapseBlockComments = (editor: vscode.TextEditor | undefined): void => {
+    if (!editor) {
+      return;
+    }
+    const previewLength = vscode.workspace
+      .getConfiguration("commentorDementor")
+      .get<number>("previewLength", DEFAULT_PREVIEW_LENGTH);
+    const selectionLines = blockCommentStartLinesToFold(editor, previewLength);
+    if (selectionLines.length > 0) {
+      void vscode.commands.executeCommand("editor.fold", {
+        direction: "down",
+        levels: 1,
+        selectionLines,
+      });
+    }
+  };
+  const updateAndCollapseEditor = (editor: vscode.TextEditor | undefined): void => {
+    updateEditor(editor);
+    setTimeout(() => collapseBlockComments(editor), 0);
+  };
+  updateAndCollapseEditor(vscode.window.activeTextEditor);
+
+  context.subscriptions.push(
+    foldedCommentDecoration,
+    blockCommentHoverDecoration,
+    vscode.languages.registerFoldingRangeProvider(
+      BLOCK_COMMENT_LANGUAGE_IDS.map((language) => ({ language })),
+      {
+        provideFoldingRanges(document) {
+          return findBlockComments(document)
+            .filter((comment) => comment.start.line < comment.end.line)
+            .map(
+              (comment) =>
+                new vscode.FoldingRange(
+                  comment.start.line,
+                  comment.end.line,
+                  vscode.FoldingRangeKind.Comment,
+                ),
+            );
+        },
+      },
+    ),
+    vscode.commands.registerCommand(
+      "commentor-dementor.refresh",
+      updateActiveEditor,
+    ),
+    vscode.window.onDidChangeActiveTextEditor(updateAndCollapseEditor),
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      const selectedBlockStarts = selectedBlockCommentStartLines(event.textEditor);
+      if (selectedBlockStarts.length > 0) {
+        void vscode.commands.executeCommand("editor.unfold", {
+          direction: "down",
+          levels: 1,
+          selectionLines: selectedBlockStarts,
+        });
+      }
+      updateAndCollapseEditor(event.textEditor);
+    }),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document === vscode.window.activeTextEditor?.document) {
+        updateAndCollapseEditor(vscode.window.activeTextEditor);
+      }
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("commentorDementor")) {
+        updateAndCollapseEditor(vscode.window.activeTextEditor);
+      }
+    }),
+  );
+}
+
+export function deactivate(): void {}

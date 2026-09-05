@@ -1,71 +1,21 @@
-# commentor-dementor README
+# Commentor Dementor
 
-This is the README for your extension "commentor-dementor". After writing up a brief description, we recommend including the following sections.
+Commentor Dementor keeps long comments readable by displaying their first 40
+characters followed by `...`.
 
-## Features
+Hover the folded portion to see the complete comment in a tooltip. Move the
+cursor into that portion to temporarily reveal the original text so it can be
+read or edited normally; moving away folds it again.
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+Multi-line `/* ... */` and JSDoc comments use VS Code's compact fold display:
+the first line remains with a `...` summary while the interior is collapsed.
+Hover the visible first line to see the full block, or select that line to
+expand it. Use the editor-gutter folding control to collapse it again.
 
-For example if there is an image subfolder under your extension project workspace:
+## Settings
 
-\!\[feature X\]\(images/feature-x.png\)
+`commentorDementor.previewLength` controls how many characters are shown before
+folding. It defaults to `40`.
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
-
-## Requirements
-
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
-
-## Extension Settings
-
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+The extension recognizes `//` comments in C-style languages, plus `#`, `--`,
+and `;` in common languages that use those markers.

@@ -1,7 +1,7 @@
 {
   "name": "commentor-dementor",
   "displayName": "commentor-dementor",
-  "description": "Makes vebose comments hidden until hovered over",
+  "description": "Folds long comments until you hover over or edit them",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.134.0"
@@ -9,15 +9,32 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:typescript",
+    "onLanguage:javascript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascriptreact"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "commentor-dementor.helloWorld",
-        "title": "Hello World"
+        "command": "commentor-dementor.refresh",
+        "title": "Commentor Dementor: Refresh Folded Comments"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Commentor Dementor",
+      "properties": {
+        "commentorDementor.previewLength": {
+          "type": "number",
+          "default": 40,
+          "minimum": 1,
+          "description": "Number of comment characters to show before folding the remainder."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "pnpm run compile",
